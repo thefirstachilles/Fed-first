@@ -18,12 +18,12 @@ def init_args():
     # parser.add_argument('-ef', '--epsilon_final', type=float, default=0.01,  help='epsilon final')
     # parser.add_argument('-ed', '--epsilon_decay', type=int, default=8000,  help='epsilon decay')
     # parser.add_argument('-ms', '--memory_size', type=int, default=100000,  help='memory_size')
-    parser.add_argument('-lpl', '--lstm_ppo_lr', type=float, default=0.0005,  help='learning_rate')
+    parser.add_argument('-lpl', '--lstm_ppo_lr', type=float, default=0.0001,  help='learning_rate')
     parser.add_argument('-ga', '--gamma', type=float, default=0.99,  help='gamma')
     parser.add_argument('-lmbda', '--lmbda', type=float, default=0.95,  help='lambda')
-    parser.add_argument('-ec', '--eps_clip', type=float, default=0.1,  help='eps_clip')
+    parser.add_argument('-ec', '--eps_clip', type=float, default=0.001,  help='eps_clip')
     parser.add_argument('-ke', '--k_epoch', type=int, default=2,  help='k_epoch')
-    parser.add_argument('-Th', '--T_horizon', type=int, default=40,  help='T_horizon')
+    parser.add_argument('-Th', '--T_horizon', type=int, default=50,  help='T_horizon')
     return parser.parse_args().__dict__
 # learning_rate = 0.0005
 # gamma         = 0.98
@@ -41,20 +41,21 @@ class PPO(nn.Module):
         self.lstm  = nn.LSTM(64,32)
         self.fc_pi = nn.ModuleList([nn.Linear(32, n) for i in range(ac)])
         self.fc_v  = nn.Linear(32,1)
-        
+        # self.softmax = nn.Softmax
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.args['lstm_ppo_lr'])
 
         self.gamma = args['gamma']
         self.lmbda = args['lmbda']
         self.eps_clip = args['eps_clip']
+       
     def pi(self, x, hidden):
         x = F.relu(self.fc1(x))
         x = x.view(-1, 1, 64)
         x, lstm_hidden = self.lstm(x, hidden)
-        prob = []
-        for i, branch in enumerate(self.fc_pi):
-            prob.append(Categorical(logits=self.fc_pi[i](x)))
+        # x = torch.stack([l(x) for l in self.fc_pi], dim = 1)
+        # prob = F.softmax(x, dim=3)
+        prob = torch.stack([F.softmax(l(x),dim = 2) for l in self.fc_pi], dim = 1)
 
         return prob, lstm_hidden
     
@@ -109,17 +110,19 @@ class PPO(nn.Module):
             advantage_lst.reverse()
             advantage = torch.tensor(advantage_lst, dtype=torch.float)
 
-            policy, _ = self.pi(s, first_hidden)
-            pi_a = []
-            for i, action_branch in enumerate(policy):
-                pi_a.append(action_branch.probs.squeeze(1).gather(1, a[:,i].unsqueeze(1)))
-            pi_a = torch.stack(pi_a, dim=2).squeeze(1)
-            ratio = torch.exp(torch.log(pi_a) - torch.log(prob_a)).mean(1, True) # a/b == log(exp(a)-exp(b))
+            pi, _ = self.pi(s, first_hidden)
+            # pi_a = prob.gather(1,torch.tensor(action.reshape(10,1)))
+            pi_a = pi.squeeze(2).gather(2,a.unsqueeze(2))
+            # pi_a = []
+            # for i, action_branch in enumerate(pi):
+            #     pi_a.append(action_branch.probs.squeeze(1).gather(1, a[:,i].unsqueeze(1)))
+            # pi_a = torch.stack(pi_a, dim=2).squeeze(1)
+            ratio = torch.exp((torch.log(pi_a.squeeze(2))- torch.log(prob_a)).sum(1).unsqueeze(1))# a/b == log(exp(a)-exp(b))
 
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
             loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(v_s, td_target.detach())
-
+            print('loss',loss)
             self.optimizer.zero_grad()
             loss.mean().backward(retain_graph=True)
             self.optimizer.step()
@@ -133,7 +136,7 @@ def main():
     print_interval = 20
     recap = []
     
-    for n_epi in range(10000):
+    for n_epi in range(100):
         h_out = (torch.zeros([1, 1, 32], dtype=torch.float), torch.zeros([1, 1, 32], dtype=torch.float))
         s = env.get_env_info()
         done = False
@@ -141,20 +144,27 @@ def main():
         while not done:
             for t in range(args['T_horizon']):
                 h_in = h_out
-                policy, h_out = model.pi(torch.from_numpy(s).float(), h_in)
-                _actions = []
-                probs = []
-                for action_branch in policy:
-                    action = action_branch.sample()
-                    _actions.append(action.item())
-                    probs.append(action_branch.probs[0,0,action.item()].item())
-
-                done, r = env.train_process(np.array(_actions), t)
+                prob, h_out = model.pi(torch.from_numpy(s).float(), h_in)
+                prob = prob.view(env.args['num_of_clients'],-1)
+                action = np.ones( env.args['num_of_clients'], dtype=int)
+                for index, prob_item in enumerate(prob[:]):                 
+                    m = Categorical(prob_item)
+                    action[index] = m.sample().item()
+                # prob_a = prob.gather(3,a.view(1,-1,1,1))
+                # action = a.detach().numpy().reshape(-1)
+                # _actions = []
+                # probs = []
+                # for action_branch in policy:
+                #     action = action_branch.sample()
+                #     _actions.append(action.item())
+                #     probs.append(action_branch.probs[0,0,action.item()].item())
+                
+                done, r = env.train_process(action, t)
                 s_prime = env.get_env_info()
 
                 # s_prime, r, done, = env.get_env_info(a)
-
-                model.put_data((s, np.array(_actions), r, s_prime, np.array(probs)[np.array(_actions)], h_in, h_out, done))
+                
+                model.put_data((s, action, r, s_prime, prob.gather(1,torch.tensor(action.reshape(env.args['num_of_clients'],1))).view(-1).detach().numpy(), h_in, h_out, done))
                 s = s_prime
 
                 recap.append(r)

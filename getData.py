@@ -104,7 +104,7 @@ class GetDataSet(object):
 
         if isIID:
             order = np.arange(self.train_data_size)
-            rng2.shuffle(order)
+            self.rng.shuffle(order)
             self.train_data = train_images[order]
             self.train_label = train_labels[order]
         else:

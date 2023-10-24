@@ -10,21 +10,21 @@ import numpy as np
 import random 
 import argparse
 from branch_model import DuelingNetwork, BranchingQNetwork
-from fed_server import Fed_server 
+from fed_server_env import Fed_server 
 
 def init_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter, description="FedAvg")
     ## bqn 参数
-    parser.add_argument('-es', '--epsilon_start', type=float, default=1,  help='epsilon start')
-    parser.add_argument('-ef', '--epsilon_final', type=float, default=0.01,  help='epsilon final')
-    parser.add_argument('-ed', '--epsilon_decay', type=int, default=8000,  help='epsilon decay')
-    parser.add_argument('-ga', '--gamma', type=float, default=0.98,  help='gamma')
-    parser.add_argument('-bl', '--bqn_lr', type=float, default=1e-4,  help='bqn lr')
+    parser.add_argument('-es', '--epsilon_start', type=float, default=1.0,  help='epsilon start')
+    parser.add_argument('-ef', '--epsilon_final', type=float, default=0.1,  help='epsilon final')
+    parser.add_argument('-ed', '--epsilon_decay', type=int, default=1000,  help='epsilon decay')
+    parser.add_argument('-ga', '--gamma', type=float, default=0.99,  help='gamma')
+    parser.add_argument('-bl', '--bqn_lr', type=float, default=0.001,  help='bqn lr')
     parser.add_argument('-tnuf', '--target_net_update_freq', type=int, default=1000,  help='target net update freq')
-    parser.add_argument('-ms', '--memory_size', type=int, default=100000,  help='memory_size')
-    parser.add_argument('-bs', '--batch_size', type=int, default=500,  help='batch_size')
-    parser.add_argument('-ls', '--learning_starts', type=float, default=5000,  help='learning_starts')
-    parser.add_argument('-mf', '--max_frames', type=float, default=10000000,  help='max_frames')
+    parser.add_argument('-ms', '--memory_size', type=int, default=10000,  help='memory_size')
+    parser.add_argument('-bs', '--batch_size', type=int, default=30,  help='batch_size')
+    parser.add_argument('-ls', '--learning_starts', type=float, default=60,  help='learning_starts')
+    parser.add_argument('-mf', '--max_frames', type=float, default=3000,  help='max_frames')
     return parser.parse_args().__dict__
 
 class BranchingDQN(nn.Module): 
@@ -74,7 +74,7 @@ class BranchingDQN(nn.Module):
         expected_q_vals = rewards + max_next_q_vals*0.99*masks
         # print(expected_q_vals[:5])
         loss = F.mse_loss(expected_q_vals, current_q_values)
-
+        print('loss',loss)
         # input(loss)
 
         # print('\n'*5)
@@ -139,33 +139,55 @@ if __name__=="__main__":
     s = env.get_env_info()
     ep_reward = 0. 
     recap = []
-
+    i = 0
     for frame in range(args['max_frames']): 
+        # if_memo = False
         epsilon = args['epsilon_final']+ (args['epsilon_start'] - args['epsilon_final']) * np.exp(-1. * frame / args['epsilon_decay'])
 
         if np.random.random() > epsilon: 
             action = agent.get_action(torch.tensor(s, dtype=torch.float32))
+            
         else: 
-            action = np.random.randint(2, size=env.args['num_of_clients'])
+            # if_memo = True
+            # 希望在h最好的前提下去随机选择20到40个
+            random_num = int(rng2.random()*7)+3
+            action = np.zeros(shape = env.args['num_of_clients'], dtype=int)
+            candi_action_indices =  np.argsort(env.Sat_to_iot.h_k_los_value)[:10].tolist()
+            # 从40个里随机抽取了20-40个设备
+            random_indices = rng2.choice(10, random_num, replace=False)
+            # 删去candi_action_indices 中没有random上的
+            _candi_action_indices = []
+            for index, item in enumerate(random_indices):
+                _candi_action_indices.append(candi_action_indices[item])
+            for index,item in enumerate(_candi_action_indices):
+                action[item] = 1
+            # action = np.random.randint(2, size=env.args['num_of_clients'])
+            # action = np.zeros(shape = env.args['num_of_clients'], dtype=int)
+            # random_num = rng2.random()
+            # random_sort = rng2.choice(env.args['num_of_clients'], int(env.args['num_of_clients']*random_num/2), replace=False)
+            # for index, item in enumerate(random_sort):
+            #     action[item] = 1
+                
             # a_ = np.zeros(env.args['num_of_clients'])
             # join_num = int(env.args['num_of_clients']*env.args['cfraction'])
             # for i in list(range(join_num)):
             #     a_[i] = 1
             # np.random.shuffle(a_)
             # action = np.random.shuffle(np.hstack((np.ones(int(env.args['num_of_clients']*env.args['cfraction'])), np.zeros(int(env.args['num_of_clients']*(1-env.args['cfraction']))))))
-        done, r = env.train_process(action, frame)
+        done, r = env.train_process(action, i)
         ns = env.get_env_info()
         recap.append(r)  
         # with open('test-bqn.txt','w') as file:
         #         file.write(str(recap))
         #         file.close()
-
+        i+=1
         if done:
             env.reset()
             ns = env.get_env_info()
             recap.append(ep_reward)
             ep_reward = 0.  
-
+            i=0
+        # if if_memo:
         memory.push((s.reshape(-1).tolist(), action, r, ns.reshape(-1).tolist(), 0. if done else 1.))
         s = ns  
 

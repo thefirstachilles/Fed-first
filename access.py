@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import scipy.special as special
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 # db与p的转换
 def dbmtowatt(x):
     return (10**(x/10))/1000
@@ -14,7 +14,7 @@ arcsin=np.arcsin
 sin=np.sin
 cos=np.cos
 pi = np.pi
-log = np.log
+log = np.log2
 C = 3*10**8
 f = 30*10**9
 d_s = 200*10**(-3)
@@ -51,9 +51,13 @@ class Sat_to_iot:
     def out_geometry(self):
         # 逐秒计算卫星经度差和维度差，并且存储
         # 以10s 为一个slot
-        t = 10
+        t =10
         # self.d_s_arr = []
-      
+        if self.sate_loca[0] > 80:
+            # 重新初始化卫星初始经纬度
+            sate_lo=25.01   
+            sate_la=0
+            self.sate_loca=np.array([sate_lo,sate_la]) 
         # 更新卫星经度与纬度
         delta_lo_la = np.array([t*self.w_v*cos(self.inclin), t*self.w_v*sin(self.inclin)])
         self.sate_loca = self.sate_loca + delta_lo_la
@@ -92,13 +96,13 @@ class Sat_to_iot:
         h_k_los = g_k**(0.5)
         self.h_k_los_value = np.absolute(h_k_los)
 
-    def get_power(self):
+    def get_power(self, clients):
         ## 计算信道容量，并且存储
         ## 传输的信息大小有30k byte
         M = 30*8*10**3
         noise_power = dbmtowatt(30)
         p_max = 1
-        C_k = B*(1+log(p_max*(self.h_k_los_value**2)/(noise_power)))
+        C_k = B*log(1 + p_max*(self.h_k_los_value[clients]**2)/(noise_power))
         self.E_client = M/C_k*p_max
         self.total_E = np.sum(self.E_client)
         # capacity = 1+np.log(,2)
@@ -109,10 +113,10 @@ if __name__=="__main__":
     rng = np.random.default_rng(seed=50)
     sattoiot = Sat_to_iot(10, rng)
     energy_list = []
-    while sattoiot.sate_loca[0]>25 and sattoiot.sate_loca[0]<65:
+    while sattoiot.sate_loca[0]>25 and sattoiot.sate_loca[0]<80:
         sattoiot.out_geometry()
         sattoiot.out_h()
-        sattoiot.get_power()
+        sattoiot.get_power([1,2,3])
         energy_list.append(sattoiot.total_E)
     plt.plot(energy_list)
     plt.show()

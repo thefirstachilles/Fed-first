@@ -18,19 +18,13 @@ def init_args():
     # parser.add_argument('-ef', '--epsilon_final', type=float, default=0.01,  help='epsilon final')
     # parser.add_argument('-ed', '--epsilon_decay', type=int, default=8000,  help='epsilon decay')
     # parser.add_argument('-ms', '--memory_size', type=int, default=100000,  help='memory_size')
-    parser.add_argument('-lpl', '--lstm_ppo_lr', type=float, default=0.2,  help='learning_rate')
+    parser.add_argument('-lpl', '--lstm_ppo_lr', type=float, default=0.01,  help='learning_rate')
     parser.add_argument('-ga', '--gamma', type=float, default=0.98,  help='gamma')
     parser.add_argument('-lmbda', '--lmbda', type=float, default=0.95,  help='lambda')
     parser.add_argument('-ec', '--eps_clip', type=float, default=0.1,  help='eps_clip')
     parser.add_argument('-ke', '--k_epoch', type=int, default=4,  help='k_epoch')
     parser.add_argument('-Th', '--T_horizon', type=int, default=50,  help='T_horizon')
     return parser.parse_args().__dict__
-# learning_rate = 0.0005
-# gamma         = 0.98
-# lmbda         = 0.95
-# eps_clip      = 0.1
-# K_epoch       = 2
-# T_horizon     = 20
 
 class PPO(nn.Module):
     def __init__(self, obs, ac, n, args):
@@ -41,6 +35,7 @@ class PPO(nn.Module):
         self.lstm  = nn.LSTM(64,32)
         self.fc_pi = nn.Linear(32,ac)
         self.fc_v  = nn.Linear(32,1)
+        self.tanh = nn.Tanh()
         self.optimizer = optim.Adam(self.parameters(), lr=self.args['lstm_ppo_lr'])
 
         self.gamma = args['gamma']
@@ -51,8 +46,8 @@ class PPO(nn.Module):
         x = x.view(-1, 1, 64)
         x, lstm_hidden = self.lstm(x, hidden)
         x = self.fc_pi(x)
-        prob = F.softmax(x, dim=2)
-        return prob, lstm_hidden
+        x = self.tanh(x)
+        return x, lstm_hidden
     
     def v(self, x, hidden):
         x = F.relu(self.fc1(x))
@@ -127,7 +122,7 @@ def main():
 
     recap = []
     
-    for n_epi in range(10):
+    for n_epi in range(500):
         h_out = (torch.zeros([1, 1, 32], dtype=torch.float), torch.zeros([1, 1, 32], dtype=torch.float))
         s = env.get_env_info()
         done = False
@@ -137,21 +132,21 @@ def main():
                 h_in = h_out
                 prob, h_out = model.pi(torch.from_numpy(s).float(), h_in)
                 prob = prob.view(-1)
-                m = Categorical(prob)
-                sample_arr = np.zeros(env.args['num_of_clients'])
-                for _ in list(range(100)):
-                    sample_arr[m.sample().item()]+=1
-                a = np.argsort(sample_arr)[::-1][:env.num_in_comm]
-                # a = m.sample().item()
-                action = np.zeros(env.args['num_of_clients'])
+                a = np.argwhere((prob.detach().numpy())>0).reshape((-1))
+                # m = Categorical(prob)
+                # sample_arr = np.zeros(env.args['num_of_clients'])
+                # for _ in list(range(100)):
+                #     sample_arr[m.sample().item()]+=1
+                # a = np.argsort(sample_arr)[::-1][:env.num_in_comm]
+                action = np.zeros(env.args['num_of_clients'],dtype=int)
                 action[a] = 1
 
                 done, r = env.train_process(action, t)
                 s_prime = env.get_env_info()
 
                 # s_prime, r, done, = env.get_env_info(a)
-
-                model.put_data((s, a, r/100.0, s_prime, prob.detach().numpy()[a], h_in, h_out, done))
+                _a = np.arange(0, 10, 1, dtype=int)
+                model.put_data((s, _a, r/100.0, s_prime, prob.detach().numpy()[_a], h_in, h_out, done))
                 s = s_prime
 
                 recap.append(r)

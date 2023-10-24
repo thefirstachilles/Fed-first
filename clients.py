@@ -3,7 +3,8 @@ import torch
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 from getData import GetDataSet
-
+from scipy.ndimage import gaussian_filter
+from matplotlib import pyplot as plt
 
 
 class client(object):
@@ -26,24 +27,39 @@ class client(object):
                 loss.backward()
                 opti.step()
                 opti.zero_grad()
-        self.test_dl = DataLoader(self.test_ds, batch_size=localBatchSize, shuffle=True)
-        with torch.no_grad():
-            sum_accu = 0
-            num = 0
-            for data, label in self.test_dl:
-                data, label = data.to(self.dev), label.to(self.dev)
-                preds = Net(data)
-                preds = torch.argmax(preds, dim=1)
-                sum_accu += (preds == label).float().mean()
-                num += 1
-            accu = sum_accu / num
-        return Net.state_dict(), accu
+        return Net.state_dict()
     # def testLocal(self):
 
     #     return
 
-    def local_val(self):
-        pass
+    def local_val(self, Net, global_parameters,lossFun):
+        with torch.no_grad():
+            Net.load_state_dict(global_parameters, strict=True)
+            # self.test_dl = DataLoader(self.test_ds)
+            self.test_dl = DataLoader(self.train_ds)
+            num_batches = len(self.test_dl)
+            size = len(self.test_dl.dataset)
+            test_loss, correct = 0, 0
+            for data, label in self.test_dl:
+                data, label = data.to(self.dev), label.to(self.dev)
+                preds = Net(data)
+                test_loss += lossFun(preds, label).item()
+                correct += (preds.argmax(1) == label).type(torch.float).sum().item()
+        test_loss /= num_batches
+        correct /= size
+        # Net.load_state_dict(global_parameters, strict=True)
+        # self.test_dl = DataLoader(self.test_ds)
+        # with torch.no_grad():
+        #     sum_accu = 0
+        #     num = 0
+        #     for data, label in self.test_dl:
+        #         data, label = data.to(self.dev), label.to(self.dev)
+        #         preds = Net(data)
+        #         preds = torch.argmax(preds, dim=1)
+        #         sum_accu += (preds == label).float().mean()
+        #         num += 1
+        #     accu = sum_accu / num
+        return test_loss
 
 
 class ClientsGroup(object):
@@ -79,16 +95,36 @@ class ClientsGroup(object):
             data_shards2 = train_data[shards_id2 * shard_size: shards_id2 * shard_size + shard_size]
             label_shards1 = train_label[shards_id1 * shard_size: shards_id1 * shard_size + shard_size]
             label_shards2 = train_label[shards_id2 * shard_size: shards_id2 * shard_size + shard_size]
+            
             local_data, local_label = np.vstack((data_shards1, data_shards2)), np.vstack((label_shards1, label_shards2))
+            
+            # 随机抽取1000张 减小运算量
+            permutation_order = self.rng.permutation(local_data.shape[0])[:100]
+            local_data, local_label = local_data[permutation_order], local_label[permutation_order]
             local_label = np.argmax(local_label, axis=1)
-            local_test_data = mnistDataSet.test_data[i*test_size: i*test_size + test_size]
-            local_test_label = mnistDataSet.test_label[i*test_size: i*test_size + test_size]
+            local_test_data = mnistDataSet.test_data[i*test_size: i*test_size + test_size][:100]
+            local_test_label = mnistDataSet.test_label[i*test_size: i*test_size + test_size][:100]
             local_test_label = np.argmax(local_test_label, axis=1)
+            # 处理图像
+            # 按照一定比例处理，比方i=0 不处理 其他处理百分之i*10
+            if i > 0:
+                process_order = np.arange(0,i*10,dtype=int)
+                for x in process_order:
+                    # process_lable = local_label[x]
+                    process_data = local_data[x].reshape(28,28,1)
+                    process_data = gaussian_filter(process_data, sigma=(2,2,0))
+                    local_data[x] = process_data.reshape(-1,)
+                    
+                    # process_lable = local_test_label[x]
+                    process_data = local_test_data[x].reshape(28,28,1)
+                    process_data = gaussian_filter(process_data, sigma=(2,2,0))
+                    local_test_data[x] = process_data.reshape(-1,)
             someone = client(TensorDataset(torch.tensor(local_data), torch.tensor(local_label)), TensorDataset(torch.tensor(local_test_data), torch.tensor(local_test_label)), self.dev)
             self.clients_set['client{}'.format(i)] = someone
 
 if __name__=="__main__":
-    MyClients = ClientsGroup('cifar', True, 100, 1)
+    rng2 = np.random.default_rng(seed=100)
+    MyClients = ClientsGroup('cifar', True, 100, 1, rng2)
     print(MyClients.clients_set['client10'].train_ds[0:100])
     print(MyClients.clients_set['client11'].train_ds[400:500])
 
