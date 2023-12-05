@@ -51,7 +51,7 @@ class Sat_to_iot:
     def out_geometry(self):
         # 逐秒计算卫星经度差和维度差，并且存储
         # 以10s 为一个slot
-        t =10
+        t =25
         # self.d_s_arr = []
         if self.sate_loca[0] > 80:
             # 重新初始化卫星初始经纬度
@@ -111,7 +111,7 @@ class Sat_to_iot:
 
 if __name__=="__main__":
     rng = np.random.default_rng(seed=50)
-    sattoiot = Sat_to_iot(10, rng)
+    sattoiot = Sat_to_iot(100, rng)
     energy_list = []
     while sattoiot.sate_loca[0]>25 and sattoiot.sate_loca[0]<80:
         sattoiot.out_geometry()
